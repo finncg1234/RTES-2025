@@ -1,90 +1,99 @@
-import kagglehub
-from kagglehub import KaggleDatasetAdapter
+import subprocess
+import argparse
+from autoencoder_train import train_ae
+from autoencoder_eval import eval_ae
 
-import torch
-from torch import nn, optim
-import matplotlib.pyplot as plt
+# For documentation
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
 
-import pandas as pd
-
-print(torch.__version__)
-print(torch.cuda.is_available()) # True if CUDA is available, False otherwise
-
-
-
-# Download latest version
-file_path = kagglehub.dataset_download("mohankrishnathalla/diabetes-health-indicators-dataset")
-file_path = file_path + "/diabetes_dataset.csv"
-print("Path to dataset files:", file_path)
-
-df = kagglehub.dataset_load(
-  KaggleDatasetAdapter.PANDAS,
-  "mohankrishnathalla/diabetes-health-indicators-dataset",
-  "diabetes_dataset.csv",
-  # Provide any additional arguments like 
-  # sql_query or pandas_kwargs. See the 
-  # documenation for more information:
-  # https://github.com/Kaggle/kagglehub/blob/main/README.md#kaggledatasetadapterpandas
-)
-
-print("First 5 records:", df.head())
-
-df = df.apply(pd.to_numeric, errors='coerce')
-df = df.fillna(0)
-df = (df - df.min()) / (df.max() - df.min())
-
-class AE(nn.Module):
-    def __init__(self):
-        super(AE, self).__init__()
-        self.encoder = nn.Sequential(
-            nn.Linear(30, 15),
-            nn.ReLU(),
-            nn.Linear(15, 8),
-        )
-        self.decoder = nn.Sequential(
-            nn.Linear(8, 15),
-            nn.ReLU(),
-            nn.Linear(15, 30),
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
-        encoded = self.encoder(x)
-        decoded = self.decoder(encoded)
-        return decoded
+model_no_bfw = "ae_mnist_digit2_no_bfw.pth"
+model_bfw = "ae_mnist_digit2_bfw.pth"
+def train():
+    print("training model without BFW...")
+    train_ae(False)
+    print("training model with BFW...")
+    train_ae(True)
     
-model = AE()
-loss_function = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-8)
 
-epochs = 5
-outputs = []
-losses = []
+def evaluate():
+    print("running evaluation...")
+    eval_ae(model_no_bfw)
+    eval_ae(model_bfw)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
-data = torch.tensor(df.iloc[:, 0:30].values, dtype=torch.float32).to(device)
+def report():
+    c = canvas.Canvas("autoencoder_example.pdf", pagesize=letter)
+    width, height = letter
+    cursor = height - 50
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(50, cursor, "Results from Autoencoder Proof of Concept with MNIST Dataset")
+    cursor -= 25
+    c.setFont("Helvetica", 12)
+    c.drawString(50, cursor, "Comparison of Loss with Number of Iterations/Epochs with and without BFW")
+    cursor -= 10
+    image_height = 150
+    cursor -= image_height
+    c.drawImage("training_data\\loss_per_epoch_bfw.png", width/2 - 225, cursor, width=200, height=image_height)
+    c.drawImage("training_data\\loss_per_epoch_no_bfw.png", width/2 + 25, cursor, width=200, height=image_height)
+    cursor -= 25
+    c.drawString(50, cursor, "Example Reconstruction of MNIST Digits without BFW")
+    image_height = 100
+    cursor -= image_height + 5
+    c.drawImage("evaluation_data\\reconstructed_images_no_bfw.png", 50, cursor, width=400, height=image_height)
+    cursor -= 10
+    c.setFont("Helvetica", 8)
+    c.drawString(75, cursor, "Even though model only trained on digit 2, we see decent reconstruction for all digits")
+    cursor -= 15
+    c.setFont("Helvetica", 12)
+    c.drawString(50, cursor, "Example Reconstruction of MNIST Digits with BFW")
+    cursor -= image_height + 5
+    c.drawImage("evaluation_data\\reconstructed_images_bfw.png", 50, cursor, width=400, height=image_height)
+    cursor -= 10
+    c.setFont("Helvetica", 8)
+    c.drawString(75, cursor, "Using BFW, we can see there is poor reconstruction for digits other than 2.")
+    cursor -= 10
+    c.drawString(75, cursor, "This is desired as it will allow us to distinguish between a 2 and any other digit based on reconstruction error.")
+    cursor -= 15
+    c.setFont("Helvetica", 12)
+    c.drawString(50, cursor, "Comparison of ROC (Receiver Operating Characteristic) Curve with and without BFW")
+    cursor -= 10
+    image_height = 150
+    cursor -= image_height
+    c.drawImage("evaluation_data\\ROC_no_bfw.png", width/2 - 225, cursor, width=200, height=image_height)
+    c.drawImage("evaluation_data\\ROC_bfw.png", width/2 + 25, cursor, width=200, height=image_height)
+    cursor -= 10
+    c.setFont("Helvetica", 8)
+    c.drawString(75, cursor, "Larger Area Under Curve is desirable since it allows us to select an error threshhold with both low false positive rate and high true positive rate.")
+    cursor -= 10
+    c.drawString(75, cursor, "We see that the AUC improves when we use the BFW which is consistent with our observations of the reconstructed images")
+    c.showPage()   # finish this page
+    c.save()       # save file
 
-for epoch in range(epochs):
-    for x in data:
-        x = x.unsqueeze(0)
-
-        reconstructed = model(x)
-        loss = loss_function(reconstructed, x)
-        
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        
-        losses.append(loss.item())
     
-    outputs.append((epoch, x, reconstructed))
-    print(f"Epoch {epoch+1}/{epochs}, Loss: {loss.item():.6f}")
 
-plt.style.use('fivethirtyeight')
-plt.figure(figsize=(8, 5))
-plt.plot(losses, label='Loss')
-plt.xlabel('Iterations')
-plt.ylabel('Loss')
-plt.legend()
-plt.show()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run training or evaluation")
+
+    parser.add_argument(
+        "-t", "--train",
+        action="store_true",
+        help="Train the model first"
+    )
+    parser.add_argument(
+        "-e", "--eval",
+        action="store_true",
+        help="Run evaluation of trained model"
+    )
+
+    args = parser.parse_args()
+
+    if args.train:
+        train()
+    if args.eval:
+        evaluate()
+    report()
+
+
+
+# subprocess.run(["python", "basic_example_eval.py"])
+

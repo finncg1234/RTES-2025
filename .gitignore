@@ -1,0 +1,6 @@
+autoencoder_example/evaluation_data/*
+autoencoder_example/training_data/*
+autoencoder_example/__pycache__
+autoencoder_example/data
+autoencoder_example/ae*
+autoencoder_example/autoencoder_example.pdf
