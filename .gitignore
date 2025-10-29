@@ -4,3 +4,6 @@ autoencoder_example/__pycache__
 autoencoder_example/data
 autoencoder_example/ae*
 autoencoder_example/autoencoder_example.pdf
+
+autoencoder_can/data
+autoencoder_can/__pycache__

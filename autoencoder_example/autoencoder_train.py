@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from autoencoder import AE
 
 # Adjust as needed based on timing/hardware requirements
-epochs = 1000
+epochs = 10
 
 
 def train_ae(use_bfw):
