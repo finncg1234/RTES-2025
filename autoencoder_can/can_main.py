@@ -4,6 +4,9 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 import numpy as np
 import torch
+import os
+import csv
+
 from torch import nn, optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import TensorDataset
@@ -43,7 +46,7 @@ def train_ae():
     # get the features
     loader = dataset_loader()
     # instantiate our model
-    ae = AE(ae_config.input_size, True)
+    ae = AE(ae_config.input_size, ae_config.bfw)
     loss_function = nn.MSELoss()
     optimizer = optim.Adam(ae.parameters(), lr=ae_config.lr, weight_decay=ae_config.wd)
     # scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
@@ -83,8 +86,8 @@ def train_ae():
 def run_ae():
     print("Evaluating the model...")
 
-    ae = AE(ae_config.input_size, True)
-    ae.load_state_dict(torch.load(ae_config.model_path + ".pth"))
+    ae = AE(ae_config.input_size, ae_config.bfw)
+    ae.load_state_dict(torch.load(ae_config.model_path))
     ae.to(device)
     
     loader = dataset_loader()
@@ -113,19 +116,19 @@ def run_ae():
     normal_errors = all_errors[all_labels == 0]  # Label 0 = normal
     attack_errors = all_errors[all_labels == 1]  # Label 1 = attack
 
-    plt.hist(normal_errors, bins=50, alpha=0.6, label='Normal Traffic', color='blue', edgecolor='black')
-    plt.hist(attack_errors, bins=50, alpha=0.6, label='Attack Traffic', color='red', edgecolor='black')
+    # plt.hist(normal_errors, bins=50, alpha=0.6, label='Normal Traffic', color='blue', edgecolor='black')
+    # plt.hist(attack_errors, bins=50, alpha=0.6, label='Attack Traffic', color='red', edgecolor='black')
 
-    plt.xlabel('Reconstruction Error')
-    plt.ylabel('Frequency')
-    plt.title('Distribution of Reconstruction Errors')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
+    # plt.xlabel('Reconstruction Error')
+    # plt.ylabel('Frequency')
+    # plt.title('Distribution of Reconstruction Errors')
+    # plt.legend()
+    # plt.grid(True, alpha=0.3)
+    # plt.tight_layout()
 
-    # Save figure
-    plt.savefig(ae_config.file_path + "_error_distribution.png")
-    plt.close()
+    # # Save figure
+    # plt.savefig(ae_config.file_path + "_error_distribution.png")
+    # plt.close()
     # # Sweep a range of thresholds between min and max error
     thresholds = np.linspace(all_errors.min(), all_errors.max(), 50)
     precisions = []
@@ -133,6 +136,9 @@ def run_ae():
 
     fprs = []
     tprs = []
+
+    max_f1 = 0
+    best_threshold = None
 
     for t in thresholds:
         preds = (all_errors > t).astype(int)
@@ -149,21 +155,72 @@ def run_ae():
         precision = TP / (TP + FP) if (TP + FP) > 0 else 0
         recall = TP / (TP + FN) if (TP + FN) > 0 else 0
 
+        # --- F1 score ---
+        if precision + recall > 0:
+            f1 = 2 * precision * recall / (precision + recall)
+        else:
+            f1 = 0
+        # track best F1 and its threshold
+        if f1 > max_f1:
+            max_f1 = f1
+            best_threshold = t
+        
         precisions.append(precision)
         recalls.append(recall)
         fprs.append(FP / (FP + TN))
         tprs.append(TP / (TP + FN))
 
-    roc_auc = np.trapezoid(tprs, fprs)
+    order = np.argsort(fprs)
+    roc_auc = np.trapezoid(np.array(tprs)[order], np.array(fprs)[order])
 
-    plt.figure(figsize=(8,5))
-    plt.plot(fprs, tprs, label=f"ROC (AUC = {roc_auc:.3f})", linewidth=2)
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title("ROC Curve")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(ae_config.file_path + "_eval.png")
+
+    # plt.figure(figsize=(8,5))
+    # plt.plot(fprs, tprs, label=f"ROC (AUC = {roc_auc:.3f})", linewidth=2)
+    # plt.xlabel("False Positive Rate")
+    # plt.ylabel("True Positive Rate")
+    # plt.title("ROC Curve")
+    # plt.legend()
+    # plt.grid(True)
+    # plt.savefig(ae_config.file_path + "_eval.png")
+
+    csv_path = (
+        ".\\out\\" + 
+        ae_config.vehicle + 
+        "\\" + 
+        ae_config.dtype +
+        "\\" + 
+        "results.csv"
+    )
+
+    # Make sure the directories exist
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+
+    # Define the header and your row data
+    row = {
+        "feature extraction": int(ae_config.fe.value),
+        "batch size": ae_config.B,
+        "learning rate": ae_config.lr,
+        "epochs": ae_config.epochs,
+        "msg per input": ae_config.N,
+        "bfw": int(ae_config.bfw),
+        "auc": roc_auc,
+        "max f1": max_f1,
+        "max f1 threshhold": best_threshold
+    }
+
+    # Check if file exists
+    file_exists = os.path.exists(csv_path)
+
+    with open(csv_path, mode="a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=row.keys())
+
+        # Only write header if file doesn't exist yet
+        if not file_exists:
+            writer.writeheader()
+
+        writer.writerow(row)
+
+
 
 
 
@@ -179,6 +236,11 @@ def main():
         "-run",
         action="store_true",
         help="run the model"
+    )
+    parser.add_argument(
+        "-nobfw",
+        action="store_true",
+        help="turn off the bfw"
     )
     parser.add_argument(
         "-f",
@@ -220,6 +282,11 @@ def main():
         help="whether the dataset is labeled or not",
         required=True
     )
+    parser.add_argument(
+        "-model",
+        help="required when running the model - provide the path to the model",
+        required=True
+    )
     args = parser.parse_args()
     # decide whether to train or evaluate the model or both
     ae_config.N = int(args.n)
@@ -233,6 +300,8 @@ def main():
     ae_config.dtype = str(args.d)
     ae_config.vehicle = str(args.v)
 
+    ae_config.bfw = not bool(args.nobfw)
+
     if ae_config.fe == feature_extraction.NAIVE:
         ae_config.input_size = ae_config.N * 6
     elif ae_config.fe == feature_extraction.NO_CAN_DATA:
@@ -243,12 +312,13 @@ def main():
     ae_config.model_path = (
         ".\\out\\" + 
         ae_config.vehicle + 
-        "\\" + 
+        "\\weights\\" + 
         "fe-" + str(ae_config.fe.value) +  # Use .value to get the integer from enum
         "_b-" + str(ae_config.B) + 
         "_input-size-" + str(ae_config.input_size) + 
         "_epochs-" + str(ae_config.epochs) + 
-        "_lr-" + str(ae_config.lr).replace('.', '_')  # Replace '.' with '_'
+        "_lr-" + str(ae_config.lr).replace('.', '_')  + # Replace '.' with '_'
+        ("" if ae_config.bfw else "no-bfw")
     )
     ae_config.file_path = (
         ".\\out\\" + 
@@ -260,13 +330,15 @@ def main():
         "_b-" + str(ae_config.B) + 
         "_input-size-" + str(ae_config.input_size) + 
         "_epochs-" + str(ae_config.epochs) + 
-        "_lr-" + str(ae_config.lr).replace('.', '_')  # Replace '.' with '_'
+        "_lr-" + str(ae_config.lr).replace('.', '_') + # Replace '.' with '_'
+        ("" if ae_config.bfw else "no-bfw")
     )
 
     print("Proceeding with config: " + str(ae_config))
     if (args.train):
         train_ae()
     if(args.run):
+        ae_config.model_path = str(args.model)
         run_ae()
     
 if __name__ == "__main__":

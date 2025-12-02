@@ -5,5 +5,7 @@ autoencoder_example/data
 autoencoder_example/ae*
 autoencoder_example/autoencoder_example.pdf
 
-autoencoder_can/data
 autoencoder_can/__pycache__
+autoencoder_can/out/2016-chevrolet-silverado/*
+!autoencoder_can/out/2016-chevrolet-silverado/weights
+backups

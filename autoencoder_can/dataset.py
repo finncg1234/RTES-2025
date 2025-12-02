@@ -24,6 +24,104 @@ def download_can_train_and_test_dataset(vehicle, dtype, labeled):
     #     print(f"File downloaded successfully to {output_filename}")
     # except Exception as e:
     #     print(f"Error during download: {e}")
+def get_stats(vehicle, dtype, labeled):
+    """
+    Get statistics about a CAN bus dataset.
+    
+    Args:
+        vehicle: Vehicle identifier string
+        dtype: Dataset type (e.g., 'extra-attack-free', 'fuzzing')
+        labeled: Boolean indicating if dataset has attack labels
+    
+    Returns:
+        Dictionary containing dataset statistics
+    """
+    raw_data = load_data(vehicle, dtype, labeled)
+    
+    if isinstance(raw_data, int) and raw_data == -1:
+        return {"error": "Dataset not found"}
+    
+    stats = {}
+    
+    # Basic counts
+    stats['total_messages'] = len(raw_data) - 1  # Subtract header row
+    
+    if labeled:
+        # Attack vs normal message counts
+        labels = raw_data[1:, 3].astype(int)
+        stats['attack_messages'] = np.sum(labels == 1)
+        stats['normal_messages'] = np.sum(labels == 0)
+        stats['attack_percentage'] = (stats['attack_messages'] / stats['total_messages']) * 100
+        stats['class_imbalance_ratio'] = stats['normal_messages'] / max(stats['attack_messages'], 1)
+    else:
+        stats['attack_messages'] = 0
+        stats['normal_messages'] = stats['total_messages']
+        stats['attack_percentage'] = 0.0
+        stats['class_imbalance_ratio'] = None
+    
+    # Temporal statistics
+    timestamps = raw_data[1:, 0].astype(float)
+    stats['duration_seconds'] = timestamps[-1] - timestamps[0]
+    stats['messages_per_second'] = stats['total_messages'] / stats['duration_seconds']
+    
+    # CAN ID statistics
+    can_ids = raw_data[1:, 1]
+    unique_ids = np.unique(can_ids)
+    stats['unique_can_ids'] = len(unique_ids)
+    stats['most_common_id'] = None
+    stats['most_common_id_count'] = 0
+    
+    # Find most common CAN ID
+    id_counts = {}
+    for can_id in can_ids:
+        id_counts[can_id] = id_counts.get(can_id, 0) + 1
+    if id_counts:
+        most_common = max(id_counts.items(), key=lambda x: x[1])
+        stats['most_common_id'] = most_common[0]
+        stats['most_common_id_count'] = most_common[1]
+        stats['most_common_id_percentage'] = (most_common[1] / stats['total_messages']) * 100
+    
+    # Data field statistics (non-empty data fields)
+    data_fields = raw_data[1:, 2]
+    non_empty_data = np.sum([1 for d in data_fields if d and d != '0'])
+    stats['messages_with_data'] = non_empty_data
+    stats['messages_without_data'] = stats['total_messages'] - non_empty_data
+    
+    return stats
+
+
+def print_stats(stats):
+    """Pretty print statistics dictionary"""
+    if 'error' in stats:
+        print(f"Error: {stats['error']}")
+        return
+    
+    print("=" * 60)
+    print("CAN Bus Dataset Statistics")
+    print("=" * 60)
+    
+    print(f"\nBasic Counts:")
+    print(f"  Total Messages: {stats['total_messages']:,}")
+    if stats['attack_messages'] > 0:
+        print(f"  Normal Messages: {stats['normal_messages']:,}")
+        print(f"  Attack Messages: {stats['attack_messages']:,}")
+        print(f"  Attack Percentage: {stats['attack_percentage']:.2f}%")
+        print(f"  Class Imbalance Ratio: {stats['class_imbalance_ratio']:.2f}:1")
+    
+    print(f"\nTemporal Statistics:")
+    print(f"  Duration: {stats['duration_seconds']:.2f} seconds")
+    print(f"  Messages per Second: {stats['messages_per_second']:.2f}")
+    
+    print(f"\nCAN ID Statistics:")
+    print(f"  Unique CAN IDs: {stats['unique_can_ids']}")
+    if stats['most_common_id']:
+        print(f"  Most Common ID: {stats['most_common_id']}")
+        print(f"    Count: {stats['most_common_id_count']:,} ({stats['most_common_id_percentage']:.2f}%)")
+    
+    print(f"\nData Field Statistics:")
+    print(f"  Messages with Data: {stats['messages_with_data']:,}")
+    print(f"  Messages without Data: {stats['messages_without_data']:,}")
+    print("=" * 60)
 
 def load_data(vehicle, dtype, labeled):
     filename = "data\\" + vehicle + "-" + dtype + ("" if not labeled else "-labeled") + ".csv"
@@ -107,18 +205,93 @@ def fetch_dataset(conf):
 
     return tensor_dataset, tensor_labels
 
+def generate_stats_csv(vehicle, dtypes, labeled_flags, output_filename="dataset_statistics.csv"):
+    """
+    Generate a CSV file with statistics for multiple datasets.
+    
+    Args:
+        vehicle: Vehicle identifier string
+        dtypes: List of dataset types (e.g., ['extra-attack-free', 'fuzzing', 'dos'])
+        labeled_flags: List of booleans indicating if each dataset has labels
+        output_filename: Name of output CSV file
+    
+    Returns:
+        None (writes to CSV file)
+    """
+    import csv
+    
+    # Collect stats for all datasets
+    all_stats = []
+    for dtype, labeled in zip(dtypes, labeled_flags):
+        stats = get_stats(vehicle, dtype, labeled)
+        if 'error' not in stats:
+            stats['vehicle'] = vehicle
+            stats['dataset_type'] = dtype
+            stats['labeled'] = labeled
+            all_stats.append(stats)
+        else:
+            print(f"Warning: Could not load {vehicle}-{dtype}, skipping...")
+    
+    if not all_stats:
+        print("No valid datasets found. CSV not created.")
+        return
+    
+    # Define column order for CSV
+    columns = [
+        'vehicle',
+        'dataset_type',
+        'labeled',
+        'total_messages',
+        'normal_messages',
+        'attack_messages',
+        'attack_percentage',
+        'class_imbalance_ratio',
+        'duration_seconds',
+        'messages_per_second',
+        'unique_can_ids',
+        'most_common_id',
+        'most_common_id_count',
+        'most_common_id_percentage',
+        'messages_with_data',
+        'messages_without_data'
+    ]
+    
+    # Write to CSV
+    try:
+        with open(output_filename, 'w', newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=columns)
+            writer.writeheader()
+            for stats in all_stats:
+                # Handle None values for unlabeled datasets
+                row = {col: stats.get(col, 'N/A') for col in columns}
+                writer.writerow(row)
+        print(f"Statistics saved to {output_filename}")
+    except Exception as e:
+        print(f"Error writing CSV: {e}")
 
 if __name__ == "__main__":
-    # download_can_train_and_test_dataset(vehicle, type)
-    data = load_data(vehicle, type)
+    # Example 2: Custom selection of datasets
+    vehicle = "2016-chevrolet-silverado"
+    dtypes = ['extra-attack-free', 'combined', 'dos', 'fuzzy', 'gear', 'interval', 'rpm', 'speed', 'standstill']
+    labeled = [False, True, True, True, True, True, True, True, True]
+    generate_stats_csv(vehicle, dtypes, labeled, "stats.csv")
+    # Get stats for training data (attack-free)
+    # train_stats = get_stats("2016-chevrolet-silverado", "extra-attack-free", False)
+    # print_stats(train_stats)
+    
+    # # Get stats for test data (with attacks)
+    # test_stats = get_stats("2016-chevrolet-silverado", "fuzzy", True)
+    # print_stats(test_stats)
+    # # download_can_train_and_test_dataset(vehicle, type)
+    # data = load_data(vehicle, type)
 
-    print(data.shape)
-    print(data[:,1:2].shape)
-    print(data[1:5,:])
+    # print(data.shape)
+    # print(data[:,1:2].shape)
+    # print(data[1:5,:])
 
-    dataset = create_dataset(data, 3)
+    # dataset = create_dataset(data, 3)
 
-    print(dataset[0:2])
+    # print(dataset[0:2])
     # id_distr = get_id_distribution(data)
     
     # for id in id_distr:

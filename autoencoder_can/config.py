@@ -18,6 +18,8 @@ class Config:
     lr: float = 1e-4
     wd: float = 0
 
+    bfw: bool = True
+
     fe: feature_extraction = feature_extraction.NAIVE
 
     vehicle: str = "2016-chevrolet-silverado"
