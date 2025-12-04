@@ -20,7 +20,7 @@
 
 ### Deliverables
 - **Final Report:** `RTES2025_final.pdf`
-- **Final Presentation:** [YouTube Link](#) *(add link)*
+- **Final Presentation:** [YouTube Link](https://www.youtube.com/watch?v=gu0wGI2u8mg)
 
 
 ## Running the Autoencoder
